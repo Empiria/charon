@@ -1,0 +1,212 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-waypoint}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - snapchain
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-waypoint}"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - snapchain
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+
+  waypoint:
+    image: officialunofficial/waypoint:latest
+    pull_policy: always
+    init: true
+    restart: on-failure
+    command: ./waypoint start
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+      - "${WAYPOINT_MCP__PORT:-8000}:${WAYPOINT_MCP__PORT:-8000}"
+    networks:
+      - snapchain
+    environment:
+      # Database
+      WAYPOINT_DATABASE__URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-waypoint}
+      WAYPOINT_DATABASE__MAX_CONNECTIONS: ${WAYPOINT_DATABASE__MAX_CONNECTIONS:-60}
+      WAYPOINT_DATABASE__TIMEOUT_SECONDS: ${WAYPOINT_DATABASE__TIMEOUT_SECONDS:-30}
+      WAYPOINT_DATABASE__STORE_MESSAGES: ${WAYPOINT_DATABASE__STORE_MESSAGES:-false}
+
+      # Redis
+      WAYPOINT_REDIS__URL: redis://redis:6379
+      WAYPOINT_REDIS__POOL_SIZE: ${WAYPOINT_REDIS__POOL_SIZE:-100}
+      WAYPOINT_REDIS__IDLE_TIMEOUT_SECS: ${WAYPOINT_REDIS__IDLE_TIMEOUT_SECS:-60}
+      WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS: ${WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS:-300}
+
+      # Farcaster Hub
+      WAYPOINT_HUB__URL: ${WAYPOINT_HUB__URL:-snapchain.farcaster.xyz:3383}
+      # Shard configuration (defaults to subscribe_to_all_shards=true)
+      # To subscribe to specific shards, set WAYPOINT_HUB__SHARD_INDICES=1,2,3
+      WAYPOINT_HUB__SHARD_INDICES: ${WAYPOINT_HUB__SHARD_INDICES}
+      WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS: ${WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS}
+      # Custom headers for authentication (uppercase env vars will be converted to lowercase headers with hyphens)
+      WAYPOINT_HUB__HEADERS__X_API_KEY: ${WAYPOINT_HUB__HEADERS__X_API_KEY}
+      WAYPOINT_HUB__RETRY_MAX_ATTEMPTS: ${WAYPOINT_HUB__RETRY_MAX_ATTEMPTS:-5}
+      WAYPOINT_HUB__RETRY_BASE_DELAY_MS: ${WAYPOINT_HUB__RETRY_BASE_DELAY_MS:-100}
+      WAYPOINT_HUB__RETRY_MAX_DELAY_MS: ${WAYPOINT_HUB__RETRY_MAX_DELAY_MS:-30000}
+      WAYPOINT_HUB__RETRY_JITTER_FACTOR: ${WAYPOINT_HUB__RETRY_JITTER_FACTOR:-0.25}
+      WAYPOINT_HUB__RETRY_TIMEOUT_MS: ${WAYPOINT_HUB__RETRY_TIMEOUT_MS:-60000}
+      WAYPOINT_HUB__CONN_TIMEOUT_MS: ${WAYPOINT_HUB__CONN_TIMEOUT_MS:-30000}
+
+      # API Service
+      HOST: ${HOST:-0.0.0.0}
+      PORT: ${PORT:-8080}
+
+      # Logging
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      RUST_BACKTRACE: ${RUST_BACKTRACE:-0}
+      WAYPOINT_LOG_FORMAT: ${WAYPOINT_LOG_FORMAT:-json}
+
+      # StatsD
+      WAYPOINT_STATSD__PREFIX: ${WAYPOINT_STATSD__PREFIX:-way_read}
+      WAYPOINT_STATSD__ADDR: ${WAYPOINT_STATSD__ADDR:-statsd:8125}
+      WAYPOINT_STATSD__USE_TAGS: ${WAYPOINT_STATSD__USE_TAGS:-false}
+      WAYPOINT_STATSD__ENABLED: ${WAYPOINT_STATSD__ENABLED:-false}
+
+      # MCP settings
+      WAYPOINT_MCP__ENABLED: ${WAYPOINT_MCP__ENABLED:-true}
+      WAYPOINT_MCP__BIND_ADDRESS: ${WAYPOINT_MCP__BIND_ADDRESS:-0.0.0.0}
+      WAYPOINT_MCP__PORT: ${WAYPOINT_MCP__PORT:-8000}
+
+      # Backfill settings
+      BACKFILL_CONCURRENCY: ${BACKFILL_CONCURRENCY:-40}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  backfill-queue:
+    image: officialunofficial/waypoint:latest
+    pull_policy: always
+    init: true
+    restart: on-failure
+    command: ./waypoint backfill fid queue --batch-size ${BACKFILL_BATCH_SIZE:-50}
+    networks:
+      - snapchain
+    environment:
+      # Database
+      WAYPOINT_DATABASE__URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-waypoint}
+      WAYPOINT_DATABASE__MAX_CONNECTIONS: ${WAYPOINT_DATABASE__MAX_CONNECTIONS:-30}
+      WAYPOINT_DATABASE__TIMEOUT_SECONDS: ${WAYPOINT_DATABASE__TIMEOUT_SECONDS:-30}
+
+      # Redis
+      WAYPOINT_REDIS__URL: redis://redis:6379
+      WAYPOINT_REDIS__POOL_SIZE: ${WAYPOINT_REDIS__POOL_SIZE:-100}
+      WAYPOINT_REDIS__IDLE_TIMEOUT_SECS: ${WAYPOINT_REDIS__IDLE_TIMEOUT_SECS:-60}
+      WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS: ${WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS:-300}
+
+      # Farcaster Hub
+      WAYPOINT_HUB__URL: ${WAYPOINT_HUB__URL:-snapchain.farcaster.xyz:3383}
+      # Shard configuration (defaults to subscribe_to_all_shards=true)
+      # To subscribe to specific shards, set WAYPOINT_HUB__SHARD_INDICES=1,2,3
+      WAYPOINT_HUB__SHARD_INDICES: ${WAYPOINT_HUB__SHARD_INDICES}
+      WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS: ${WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS}
+      # Custom headers for authentication (uppercase env vars will be converted to lowercase headers with hyphens)
+      WAYPOINT_HUB__HEADERS__X_API_KEY: ${WAYPOINT_HUB__HEADERS__X_API_KEY}
+      WAYPOINT_HUB__RETRY_MAX_ATTEMPTS: ${WAYPOINT_HUB__RETRY_MAX_ATTEMPTS:-5}
+      WAYPOINT_HUB__RETRY_BASE_DELAY_MS: ${WAYPOINT_HUB__RETRY_BASE_DELAY_MS:-100}
+      WAYPOINT_HUB__RETRY_MAX_DELAY_MS: ${WAYPOINT_HUB__RETRY_MAX_DELAY_MS:-30000}
+      WAYPOINT_HUB__RETRY_JITTER_FACTOR: ${WAYPOINT_HUB__RETRY_JITTER_FACTOR:-0.25}
+      WAYPOINT_HUB__RETRY_TIMEOUT_MS: ${WAYPOINT_HUB__RETRY_TIMEOUT_MS:-60000}
+      WAYPOINT_HUB__CONN_TIMEOUT_MS: ${WAYPOINT_HUB__CONN_TIMEOUT_MS:-30000}
+
+      # Logging
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      RUST_BACKTRACE: ${RUST_BACKTRACE:-0}
+      WAYPOINT_LOG_FORMAT: ${WAYPOINT_LOG_FORMAT:-json}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - backfill
+
+  backfill-worker:
+    image: officialunofficial/waypoint:latest
+    pull_policy: always
+    init: true
+    restart: on-failure
+    command: ./waypoint backfill fid worker
+    networks:
+      - snapchain
+    environment:
+      # Database
+      WAYPOINT_DATABASE__URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-waypoint}
+      WAYPOINT_DATABASE__MAX_CONNECTIONS: ${WAYPOINT_DATABASE__MAX_CONNECTIONS:-60}
+      WAYPOINT_DATABASE__TIMEOUT_SECONDS: ${WAYPOINT_DATABASE__TIMEOUT_SECONDS:-30}
+
+      # Redis
+      WAYPOINT_REDIS__URL: redis://redis:6379
+      WAYPOINT_REDIS__POOL_SIZE: ${WAYPOINT_REDIS__POOL_SIZE:-100}
+      WAYPOINT_REDIS__IDLE_TIMEOUT_SECS: ${WAYPOINT_REDIS__IDLE_TIMEOUT_SECS:-60}
+      WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS: ${WAYPOINT_REDIS__MAX_CONNECTION_LIFETIME_SECS:-300}
+
+      # Farcaster Hub
+      WAYPOINT_HUB__URL: ${WAYPOINT_HUB__URL:-snapchain.farcaster.xyz:3383}
+      # Shard configuration (defaults to subscribe_to_all_shards=true)
+      # To subscribe to specific shards, set WAYPOINT_HUB__SHARD_INDICES=1,2,3
+      WAYPOINT_HUB__SHARD_INDICES: ${WAYPOINT_HUB__SHARD_INDICES}
+      WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS: ${WAYPOINT_HUB__SUBSCRIBE_TO_ALL_SHARDS}
+      # Custom headers for authentication (uppercase env vars will be converted to lowercase headers with hyphens)
+      WAYPOINT_HUB__HEADERS__X_API_KEY: ${WAYPOINT_HUB__HEADERS__X_API_KEY}
+      WAYPOINT_HUB__RETRY_MAX_ATTEMPTS: ${WAYPOINT_HUB__RETRY_MAX_ATTEMPTS:-5}
+      WAYPOINT_HUB__RETRY_BASE_DELAY_MS: ${WAYPOINT_HUB__RETRY_BASE_DELAY_MS:-100}
+      WAYPOINT_HUB__RETRY_MAX_DELAY_MS: ${WAYPOINT_HUB__RETRY_MAX_DELAY_MS:-30000}
+      WAYPOINT_HUB__RETRY_JITTER_FACTOR: ${WAYPOINT_HUB__RETRY_JITTER_FACTOR:-0.25}
+      WAYPOINT_HUB__RETRY_TIMEOUT_MS: ${WAYPOINT_HUB__RETRY_TIMEOUT_MS:-60000}
+      WAYPOINT_HUB__CONN_TIMEOUT_MS: ${WAYPOINT_HUB__CONN_TIMEOUT_MS:-30000}
+
+      # Logging
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      RUST_BACKTRACE: ${RUST_BACKTRACE:-0}
+      WAYPOINT_LOG_FORMAT: ${WAYPOINT_LOG_FORMAT:-json}
+
+      # Backfill settings
+      BACKFILL_CONCURRENCY: ${BACKFILL_CONCURRENCY:-40}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backfill-queue:
+        condition: service_started
+    profiles:
+      - backfill
+
+volumes:
+  postgres-data:
+  redis-data:
+
