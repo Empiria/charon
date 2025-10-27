@@ -10,7 +10,7 @@ This repository contains Docker Compose override configurations that extend a ba
 - **Redis** - High-performance caching and queue management
 - **Waypoint** - Farcaster Hub API client that syncs data to PostgreSQL
 - **Backfill Services** - Background workers for historical data synchronization
-- **PostGraphile** GraphQL API over PostgreSQL schema
+- **PostGraphile** - GraphQL API over PostgreSQL schema with interactive GraphiQL interface
 
 ## Architecture
 
@@ -26,11 +26,17 @@ This repository contains Docker Compose override configurations that extend a ba
                  ▼
 ┌─────────────────────────────────────────────────┐
 │  Charon Extensions (this repo)                  │
-│  - postgres (data storage)                      │
-│  - redis (cache/queue)                          │
-│  - waypoint (API service)                       │
-│  - backfill workers (historical data)           │
-│  - postgraphile (GraphQL API)                   │
+│  ┌────────────────────────────────────────────┐ │
+│  │ postgres (data storage)                    │ │
+│  │ redis (cache/queue)                        │ │
+│  │ waypoint (API service)                     │ │
+│  │ backfill workers (historical data)         │ │
+│  └────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────┐ │
+│  │ postgraphile (GraphQL API) :5000           │ │
+│  │  - GraphiQL interface                      │ │
+│  │  - Automatic schema from postgres          │ │
+│  └────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -55,6 +61,47 @@ This repository contains Docker Compose override configurations that extend a ba
 git clone <repository-url> charon
 cd charon
 ```
+
+### 2. Access the GraphQL API
+
+Once the services are running, you can access the GraphQL API:
+
+**Interactive GraphiQL Interface:**
+```
+http://<host>:5000/graphiql
+```
+
+**GraphQL Endpoint:**
+```
+http://<host>:5000/graphql
+```
+
+**Example Query:**
+```graphql
+query GetRecentCasts {
+  allCasts(
+    first: 10
+    orderBy: TIMESTAMP_DESC
+    condition: { deletedAt: null }
+  ) {
+    nodes {
+      hash
+      fid
+      text
+      timestamp
+    }
+  }
+}
+```
+
+**Example with cURL:**
+```bash
+curl -X POST http://<host>:5000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ allCasts(first: 10, orderBy: TIMESTAMP_DESC, condition: { deletedAt: null }) { nodes { fid text timestamp } } }"}'
+```
+
+**📖 For complete API documentation, see [GRAPHQL_SCHEMA.md](./GRAPHQL_SCHEMA.md)**
 
 ## Services
 
@@ -90,9 +137,31 @@ Two services work together for historical data population:
 
 Both run under the `backfill` profile (opt-in).
 
+### PostGraphile (graphile/postgraphile)
+
+- **Port**: 5000
+- **Function**: Auto-generates a complete GraphQL API from the PostgreSQL database schema
+- **Features**:
+  - GraphiQL interface for interactive query development
+  - Automatic CRUD operations for all tables
+  - Relay-style connections with cursor-based pagination
+  - Real-time schema introspection
+  - Support for filtering, ordering, and complex queries
+
+**Access GraphiQL**: `http://<host>:5000/graphiql`
+
+**GraphQL Endpoint**: `http://<host>:5000/graphql`
+
+**Schema Documentation**: See [GRAPHQL_SCHEMA.md](./GRAPHQL_SCHEMA.md) for complete API documentation including:
+- All available types and queries
+- Example queries (recent casts, follows, user profiles)
+- Performance optimization tips
+- Pagination and filtering patterns
+
 ## Resources
 
 - [Snapchain GitHub](https://github.com/farcasterxyz/snapchain)
 - [Farcaster Protocol Documentation](https://docs.farcaster.xyz/)
 - [Waypoint Documentation](https://github.com/officialunofficial/waypoint)
 - [PostGraphile Documentation](https://www.graphile.org/postgraphile/)
+- [GraphQL Schema Documentation](./GRAPHQL_SCHEMA.md) - Complete API reference with examples

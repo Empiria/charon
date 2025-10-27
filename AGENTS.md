@@ -18,7 +18,8 @@ charon/
 ├── docker-compose.override.yml   # Main override file extending base snapchain
 ├── .env                          # Environment configuration (not in git)
 ├── README.md                     # User-facing documentation
-└── AGENTS.md                     # This file - AI agent instructions
+├── AGENTS.md                     # This file - AI agent instructions
+└── GRAPHQL_SCHEMA.md             # GraphQL API schema documentation and examples
 ```
 
 ## Key Conventions
@@ -46,7 +47,7 @@ charon/
 - `waypoint`: Main API service connecting hub → database
 - `backfill-queue`: Job queue populator (profile: `backfill`)
 - `backfill-worker`: Job processor (profile: `backfill`)
-- `postgraphile`: GraphQL API generator
+- `graphql`: PostGraphile GraphQL API generator (port 5000)
 
 ### Environment Variable Patterns
 
@@ -100,31 +101,39 @@ docker compose logs -f waypoint
 
 ### 2. Adding New Services
 
-When adding services (e.g., PostGraphile):
+When adding services, follow this pattern (example: PostGraphile GraphQL service):
 
 1. **Define service in docker-compose.override.yml**:
    ```yaml
-   postgraphile:
-     image: graphile/postgraphile:latest
-     restart: unless-stopped
+   graphql:
+     image: graphile/postgraphile
+     pull_policy: always
+     restart: on-failure
+     init: true
      ports:
-       - "${POSTGRAPHILE_PORT:-5000}:5000"
-     environment:
-       # Use connection string format with variable substitution
+       - "5000:5000"
+     command: >
+       --connection postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-waypoint}
+       --schema public
+       --watch
+       --enhance-graphiql
+       --dynamic-json
+     networks:
+       - snapchain
      depends_on:
        postgres:
          condition: service_healthy
-     networks:
-       - snapchain
    ```
 
-2. **Add environment variables to README.md** (Configuration section)
+2. **Add environment variables to README.md** (Configuration section) if needed
 
 3. **Document the service** (Services section with ports, purpose, features)
 
-4. **Update API Endpoints section** if the service exposes HTTP/GraphQL endpoints
+4. **Create detailed documentation** (e.g., GRAPHQL_SCHEMA.md for API schemas)
 
-5. **Add troubleshooting guidance** for common issues
+5. **Update API Endpoints section** if the service exposes HTTP/GraphQL endpoints
+
+6. **Add troubleshooting guidance** for common issues
 
 ### 4. Environment Configuration
 
@@ -312,6 +321,47 @@ docker compose --profile backfill up -d --scale backfill-worker=3
 docker compose stop backfill-queue backfill-worker
 ```
 
+### PostGraphile (graphile/postgraphile)
+
+- **Purpose**: Auto-generates GraphQL API from PostgreSQL schema
+- **Port**: 5000 (GraphQL endpoint and GraphiQL interface)
+- **Configuration**: Minimal - connects to postgres, exposes public schema
+- **Features**: Automatic CRUD, Relay connections, filtering, ordering
+
+**Key features:**
+
+- **Automatic schema generation** - No code needed, reflects database structure
+- **GraphiQL interface** - Interactive query builder at `http://host:5000/graphiql`
+- **No foreign key relations** - Waypoint schema has no FKs, so no automatic nested queries
+- **BigInt handling** - All FID values must be passed as strings in GraphQL queries
+
+**Schema documentation:**
+
+Complete API documentation is available in `GRAPHQL_SCHEMA.md`, including:
+- All generated types and queries
+- Working example queries (recent casts, follows, user profiles, threads)
+- Performance optimization guidance
+- Instructions for adding foreign keys to enable automatic relations
+
+**Testing queries:**
+
+```bash
+# Test GraphQL endpoint
+curl -X POST http://r2d2:5000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ allCasts(first: 1) { nodes { fid text } } }"}'
+
+# Access GraphiQL in browser
+# Navigate to http://r2d2:5000/graphiql
+```
+
+**Important notes:**
+
+- BigInt values (FIDs) must be strings: `fid: "12345"` not `fid: 12345`
+- Table `user_data` becomes type `UserDatum` (singularized)
+- No automatic relations between tables (requires separate queries or adding foreign keys)
+- Use `deletedAt: null` condition to filter out soft-deleted records
+
 ## Relationship to Base Snapchain
 
 **Base snapchain installation** (`<snapchain-base-dir>/`):
@@ -383,15 +433,6 @@ docker compose up -d  # Automatically merges override
 
 ## Future Additions
 
-Services mentioned in documentation but not yet implemented:
-
-### PostGraphile
-
-- **Purpose**: Auto-generate GraphQL API from PostgreSQL schema
-- **Port**: 5000 
-- **Features**: GraphiQL interface, real-time subscriptions, schema introspection
-- **Configuration**: See README.md "Development > Adding PostGraphile"
-
 ### Integration with Base Monitoring
 
 - **Statsd**: Waypoint already configured, but could integrate with base statsd
@@ -420,6 +461,7 @@ When debugging issues, work through this checklist:
 - **PostgreSQL**: https://www.postgresql.org/docs/
 - **Redis**: https://redis.io/documentation
 - **PostGraphile**: https://www.graphile.org/postgraphile/
+- **GraphQL Schema Documentation**: [GRAPHQL_SCHEMA.md](./GRAPHQL_SCHEMA.md) - Complete API reference with examples
 
 ## Contributing Workflow
 
