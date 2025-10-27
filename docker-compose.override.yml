@@ -206,6 +206,21 @@ services:
     profiles:
       - backfill
 
+  graphql:
+    image: graphile/postgraphile
+    pull_policy: always
+    restart: on-failure
+    init: true
+    ports:
+      - "5000:5000"
+    command: >
+      --connection postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-waypoint}
+      --schema public
+      --watch
+    networks:
+      - snapchain
+
+
 volumes:
   postgres-data:
   redis-data:
